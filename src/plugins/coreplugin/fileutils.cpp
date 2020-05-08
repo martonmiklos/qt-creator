@@ -40,6 +40,7 @@
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QTextStream>
 #include <QWidget>
 
 using namespace Utils;
@@ -195,7 +196,107 @@ bool FileUtils::renameFile(const QString &orgFilePath, const QString &newFilePat
         // yeah we moved, tell the filemanager about it
         DocumentManager::renamedFile(orgFilePath, newFilePath);
     }
+
+    if (result
+            && (newFilePath.toLower().endsWith(QStringLiteral(".h"))
+                || newFilePath.toLower().endsWith(QStringLiteral(".hpp")))) {
+        QFileInfo fi(orgFilePath);
+        bool headerUpdateSuccess = updateHeaderFileGuardAfterRename(newFilePath, fi.baseName());
+        if (!headerUpdateSuccess)
+            result = false;
+    }
+
     return result;
+}
+
+bool FileUtils::updateHeaderFileGuardAfterRename(const QString &headerPath,
+                                                 const QString &oldHeaderBaseName)
+{
+    bool ret = true;
+    QFile headerFile(headerPath);
+    if (!headerFile.open(QFile::ReadOnly | QFile::Text))
+        return false;
+
+    QString guardOpen = QString("#ifndef %1_H").arg(oldHeaderBaseName.toUpper());
+    QString guardDefine = QString("#define %1_H").arg(oldHeaderBaseName.toUpper());
+    QString guardClose = QString("#endif // %1_H").arg(oldHeaderBaseName.toUpper());
+    int guardStartLine = -1;
+    int guardCloseLine = -1;
+
+    QTextStream inStream(&headerFile);
+    int lineCounter = 0;
+    while (!inStream.atEnd()) {
+        auto line = inStream.readLine().trimmed();
+        if (line == QStringLiteral("#pragma once")) {
+            // if new style pragma found skip reading the whole file
+            break;
+        }
+
+        if (guardStartLine == -1) {
+            // we are looking for the guard start
+            if (line == guardOpen) {
+                line = inStream.readLine();
+                if (!inStream.atEnd() && line == guardDefine) {
+                    guardStartLine = lineCounter;
+                    lineCounter++;
+                } else {
+                    // it the line after the guard opening is not something what we expect
+                    // then skip the whole guard replacing process
+                    break;
+                }
+            }
+        } else {
+            // guard start found looking for the closing endif
+            if (line == guardClose) {
+                guardCloseLine = lineCounter;
+                break;
+            }
+        }
+        lineCounter++;
+    }
+
+    if (guardStartLine != -1) {
+        // guard found -> copy the contents of the header to a temporary file with the updated guards
+        headerFile.seek(0);
+
+        QFileInfo fi(headerFile);
+        guardOpen = QString("#ifndef %1_H\n").arg(fi.baseName().toUpper());
+        guardDefine = QString("#define %1_H\n").arg(fi.baseName().toUpper());
+        guardClose = QString("#endif // %1_H\n").arg(fi.baseName().toUpper());
+
+        QFile tmpHeader(headerPath + ".tmp");
+        if (tmpHeader.open(QFile::WriteOnly | QFile::Text)) {
+            QTextStream outStream(&tmpHeader);
+            int lineCounter = 0;
+            while (!inStream.atEnd()) {
+                const QString line = inStream.readLine();
+                if (lineCounter == guardStartLine) {
+                    outStream << guardOpen;
+                    outStream << guardDefine;
+                    inStream.readLine();
+                    lineCounter++;
+                } else if (lineCounter == guardCloseLine) {
+                    outStream << guardClose;
+                } else {
+                    outStream << line << '\n';
+                }
+                lineCounter++;
+            }
+            tmpHeader.close();
+        } else {
+            // if opening the temp file failed report error
+            ret = false;
+        }
+    }
+    headerFile.close();
+
+    if (ret && guardStartLine != -1) {
+        // if the guard was found and updated swap the temp and the target file
+        QFile::remove(headerPath);
+        QFile::rename(headerPath + ".tmp", headerPath);
+    }
+
+    return ret;
 }
 
 } // namespace Core
