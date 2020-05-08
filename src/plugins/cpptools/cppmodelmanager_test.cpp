@@ -1039,7 +1039,7 @@ void CppToolsPlugin::test_modelmanager_renameIncludes()
         QCOMPARE(snapshot.allIncludesForDocument(sourceFile), QSet<QString>() << oldHeader);
 
     // Renaming the header
-    QVERIFY(Core::FileUtils::renameFile(oldHeader, newHeader));
+    QVERIFY(Core::FileUtils::renameFile(oldHeader, newHeader, Core::HandleIncludeGuards::Yes));
 
     // Update the c++ model manager again and check for the new includes
     modelManager->updateSourceFiles(sourceFiles).waitForFinished();
@@ -1060,9 +1060,13 @@ void CppToolsPlugin::test_modelmanager_renameIncludesInEditor()
     QVERIFY(tmpDir.isValid());
 
     const QDir workingDir(tmpDir.path());
-    const QStringList fileNames = {"foo.h", "foo.cpp", "main.cpp"};
+    const QStringList fileNames = {"baz.h", "baz2.h", "foo.h", "foo.cpp", "main.cpp"};
     const QString oldHeader(workingDir.filePath(_("foo.h")));
     const QString newHeader(workingDir.filePath(_("bar.h")));
+    const QString guardRenamingHeader(workingDir.filePath(_("baz.h")));
+    const QString guardRenamedHeader(workingDir.filePath(_("foobar2000.h")));
+    const QString guardRenamingHeader2(workingDir.filePath(_("baz2.h")));
+    const QString guardRenamedHeader2(workingDir.filePath(_("foobar4000.h")));
     const QString mainFile(workingDir.filePath(_("main.cpp")));
     CppModelManager *modelManager = CppModelManager::instance();
     const MyTestDataDir testDir(_("testdata_project1"));
@@ -1101,7 +1105,40 @@ void CppToolsPlugin::test_modelmanager_renameIncludesInEditor()
     QVERIFY(modelManager->workingCopy().contains(mainFile));
 
     // Renaming the header
-    QVERIFY(Core::FileUtils::renameFile(oldHeader, newHeader));
+    QVERIFY(Core::FileUtils::renameFile(oldHeader, newHeader, Core::HandleIncludeGuards::Yes));
+
+    // Test the renaming the header with include guard:
+    // The contents should match the foobar2000.h in the testdata_project2 project
+    QVERIFY(Core::FileUtils::renameFile(guardRenamingHeader, guardRenamedHeader,
+                                        Core::HandleIncludeGuards::Yes));
+
+    const MyTestDataDir testDir2(_("testdata_project2"));
+    QFile foobar2000Header(testDir2.file("foobar2000.h"));
+    QVERIFY(foobar2000Header.open(QFile::ReadOnly));
+    const auto foobar2000HeaderContents = foobar2000Header.readAll();
+    foobar2000Header.close();
+
+    QFile renamedHeader(guardRenamedHeader);
+    QVERIFY(renamedHeader.open(QFile::ReadOnly));
+    auto renamedHeaderContents = renamedHeader.readAll();
+    renamedHeader.close();
+    QCOMPARE(renamedHeaderContents, foobar2000HeaderContents);
+
+    // Test the renaming the header with underscore pre/suffixed include guard:
+    // The contents should match the foobar2000.h in the testdata_project2 project
+    QVERIFY(Core::FileUtils::renameFile(guardRenamingHeader2, guardRenamedHeader2,
+                                        Core::HandleIncludeGuards::Yes));
+
+    QFile foobar4000Header(testDir2.file("foobar4000.h"));
+    QVERIFY(foobar4000Header.open(QFile::ReadOnly));
+    const auto foobar4000HeaderContents = foobar4000Header.readAll();
+    foobar4000Header.close();
+
+    renamedHeader.setFileName(guardRenamedHeader2);
+    QVERIFY(renamedHeader.open(QFile::ReadOnly));
+    renamedHeaderContents = renamedHeader.readAll();
+    renamedHeader.close();
+    QCOMPARE(renamedHeaderContents, foobar4000HeaderContents);
 
     // Update the c++ model manager again and check for the new includes
     TestCase::waitForProcessedEditorDocument(mainFile);
